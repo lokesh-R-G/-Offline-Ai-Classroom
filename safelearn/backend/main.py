@@ -9,7 +9,10 @@ Endpoints:
 - POST /ask-doubt - Answer student questions
 - POST /add-contact - Add emergency contact
 - GET /contacts - Get all emergency contacts
-- POST /send-sos - Simulate SOS alert
+- GET /default-emergency-contacts - Get pre-configured emergency numbers (112, 1091, 108)
+- POST /send-sos - Send emergency SOS alert
+- GET /safety-tips - Get safety tips by category
+- POST /sos - Send SOS alert with location
 """
 
 from fastapi import FastAPI, File, UploadFile, Depends, HTTPException
@@ -23,7 +26,7 @@ import shutil
 
 from database import (
     init_db, get_db, SessionLocal, User, UploadedNote, StudyNote, Quiz,
-    EmergencyContact, SOSAlert, Doubt, Subject
+    EmergencyContact, SOSAlert, Doubt, Subject, SafetyTip
 )
 from file_processor import FileProcessor
 from text_summarizer import TextSummarizer
@@ -935,6 +938,116 @@ async def get_user_sos_alerts(user_id: int, db=Depends(get_db)):
             for a in alerts
         ]
     }
+
+
+@app.get("/default-emergency-contacts")
+async def get_default_emergency_contacts(db=Depends(get_db)):
+    """
+    Get default system-wide emergency contact numbers
+
+    Returns common emergency numbers that are available to all users:
+    - 112: National Emergency Number
+    - 1091: Women Helpline
+    - 108: Ambulance Service
+    - etc.
+    """
+    try:
+        # Fetch system-wide default contacts (user_id = 0)
+        default_contacts = db.query(EmergencyContact).filter(
+            EmergencyContact.user_id == 0
+        ).all()
+
+        if not default_contacts:
+            # Return hardcoded defaults if database is empty
+            return {
+                "default_contacts": [
+                    {"name": "National Emergency Number", "phone": "112", "category": "police"},
+                    {"name": "Women Helpline", "phone": "1091", "category": "helpline"},
+                    {"name": "Ambulance Service", "phone": "108", "category": "medical"},
+                    {"name": "Police Helpline", "phone": "100", "category": "police"},
+                    {"name": "Childline", "phone": "1098", "category": "helpline"}
+                ],
+                "message": "Default emergency contacts loaded"
+            }
+
+        return {
+            "default_contacts": [
+                {
+                    "id": c.id,
+                    "name": c.name,
+                    "phone": c.phone,
+                    "email": c.email,
+                    "category": c.category,
+                    "region": c.region,
+                    "is_favorite": c.is_favorite
+                }
+                for c in default_contacts
+            ],
+            "total": len(default_contacts),
+            "message": "Default emergency contacts available"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# =====================
+# Safety Tips Endpoints
+# =====================
+
+@app.get("/safety-tips")
+async def get_safety_tips(category: Optional[str] = None, db=Depends(get_db)):
+    """
+    Get safety tips, optionally filtered by category
+
+    Categories: Personal, Online, Travel, Workplace, Communication, Planning
+    """
+    try:
+        query = db.query(SafetyTip)
+
+        if category:
+            query = query.filter(SafetyTip.category == category)
+
+        tips = query.all()
+
+        return {
+            "total_tips": len(tips),
+            "category": category if category else "All",
+            "tips": [
+                {
+                    "id": t.id,
+                    "title": t.title,
+                    "content": t.content,
+                    "category": t.category,
+                    "created_at": t.created_at
+                }
+                for t in tips
+            ],
+            "message": "Safety tips retrieved successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/safety-tips/{tip_id}")
+async def get_safety_tip(tip_id: int, db=Depends(get_db)):
+    """Get a specific safety tip by ID"""
+    try:
+        tip = db.query(SafetyTip).filter(SafetyTip.id == tip_id).first()
+
+        if not tip:
+            raise HTTPException(status_code=404, detail="Safety tip not found")
+
+        return {
+            "id": tip.id,
+            "title": tip.title,
+            "content": tip.content,
+            "category": tip.category,
+            "created_at": tip.created_at
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # =====================
