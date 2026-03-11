@@ -14,7 +14,7 @@ export default function Sidebar() {
     { label: 'Summary', icon: Book, href: '/notes' },
     { label: 'Quiz', icon: BarChart3, href: '/quiz' },
     { label: 'Ask Doubt', icon: HelpCircle, href: '/doubt-solver' },
-    { label: 'Safety Tips', icon: ShieldAlert, href: '/safety' },
+    { label: 'Women Safety', icon: ShieldAlert, href: '/women-safety' },
     { label: 'Emergency Contacts', icon: Phone, href: '/emergency-contacts' },
   ]
 

@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard'
 import NotesUpload from './pages/NotesUpload'
 import QuizPage from './pages/QuizPage'
 import DoubtSolver from './pages/DoubtSolver'
+import WomenSafety from './pages/WomenSafety'
 import SafetyModule from './pages/SafetyModule'
 import EmergencyContacts from './pages/EmergencyContacts'
 import FakeCallSimulator from './pages/FakeCallSimulator'
@@ -19,6 +20,7 @@ function App() {
             <Route path="/notes" element={<NotesUpload />} />
             <Route path="/quiz" element={<QuizPage />} />
             <Route path="/doubt-solver" element={<DoubtSolver />} />
+            <Route path="/women-safety" element={<WomenSafety />} />
             <Route path="/safety" element={<SafetyModule />} />
             <Route path="/emergency-contacts" element={<EmergencyContacts />} />
             <Route path="/fake-call" element={<FakeCallSimulator />} />
