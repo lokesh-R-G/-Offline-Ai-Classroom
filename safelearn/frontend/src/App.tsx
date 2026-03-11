@@ -1,5 +1,5 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
-import Navigation from './components/Navigation'
+import Sidebar from './components/Sidebar'
 import Dashboard from './pages/Dashboard'
 import NotesUpload from './pages/NotesUpload'
 import QuizPage from './pages/QuizPage'
@@ -12,8 +12,8 @@ function App() {
   return (
     <Router>
       <div className="min-h-screen bg-gray-50">
-        <Navigation />
-        <main className="container mx-auto px-4 py-8">
+        <Sidebar />
+        <main className="md:ml-64 mt-16 md:mt-0 p-4 md:p-8 min-h-screen">
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/notes" element={<NotesUpload />} />

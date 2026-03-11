@@ -1,4 +1,8 @@
 import { useState } from 'react'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Phone, Pause, CheckCircle2 } from 'lucide-react'
 
 export default function FakeCallSimulator() {
   const [isCallActive, setIsCallActive] = useState(false)
@@ -72,25 +76,34 @@ export default function FakeCallSimulator() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8">
+    <div className="space-y-8">
+      {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold mb-2">Fake Call Simulator</h1>
-        <p className="text-gray-600">Practice responding to suspicious calls in a safe environment</p>
+        <h1 className="text-4xl font-bold text-gray-900">Fake Call Simulator</h1>
+        <p className="text-lg text-gray-600 mt-2">Practice responding to suspicious calls in a safe environment</p>
       </div>
 
       {!isCallActive ? (
-        <div className="bg-white rounded-lg shadow p-6 space-y-6">
-          <div>
-            <h2 className="text-2xl font-bold mb-4">Select a Scenario</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        // Scenario Selection
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Phone className="h-5 w-5" />
+              Select a Scenario
+            </CardTitle>
+            <CardDescription>Choose a call scenario to practice your response</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {/* Scenario Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {scenarios.map((scenario) => (
                 <button
                   key={scenario.id}
                   onClick={() => setSelectedScenario(scenario.id)}
                   className={`p-4 rounded-lg text-left transition border-2 ${
                     selectedScenario === scenario.id
-                      ? 'border-safety-red bg-red-50'
-                      : 'border-gray-200 hover:border-gray-300'
+                      ? 'border-red-500 bg-red-50'
+                      : 'border-gray-200 hover:border-gray-300 bg-white'
                   }`}
                 >
                   <h3 className="font-semibold text-gray-900">{scenario.title}</h3>
@@ -99,103 +112,128 @@ export default function FakeCallSimulator() {
               ))}
             </div>
 
+            {/* Script Preview */}
             {selectedScenarioObj && (
-              <div className="bg-gray-50 rounded-lg p-4 mb-6 border-l-4 border-safety-blue">
-                <h3 className="font-semibold text-gray-900 mb-2">Caller Script:</h3>
-                <p className="text-gray-700 italic">"{selectedScenarioObj.script}"</p>
-              </div>
+              <Card className="bg-blue-50 border-blue-200">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Caller Script</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-gray-700 italic">"{selectedScenarioObj.script}"</p>
+                </CardContent>
+              </Card>
             )}
-          </div>
 
-          <button
-            onClick={startCall}
-            className="w-full bg-safety-red text-white py-4 rounded-lg font-semibold text-lg hover:bg-red-700 transition"
-          >
-            Start Practice Call
-          </button>
-        </div>
+            {/* Start Button */}
+            <Button
+              onClick={startCall}
+              className="w-full bg-red-600 hover:bg-red-700 text-white"
+              size="lg"
+            >
+              <Phone className="mr-2 h-4 w-4" />
+              Start Practice Call
+            </Button>
+          </CardContent>
+        </Card>
       ) : (
-        <div className="bg-white rounded-lg shadow p-8 space-y-6">
-          {/* Call Active Indicator */}
-          <div className="bg-gradient-to-r from-red-50 to-orange-50 rounded-lg p-6 text-center">
-            <div className="flex items-center justify-center space-x-3 mb-4">
-              <div className="w-4 h-4 bg-safety-red rounded-full animate-pulse"></div>
-              <span className="text-lg font-semibold text-safety-red">Call in Progress</span>
-            </div>
-            <div className="text-4xl font-bold text-gray-900">
-              {Math.floor(callTime / 60)}:{(callTime % 60).toString().padStart(2, '0')}
-            </div>
-          </div>
+        // Call Simulation
+        <div className="space-y-6">
+          {/* Call Timer Card */}
+          <Card className="border-2 border-red-200 bg-red-50">
+            <CardContent className="pt-6">
+              <div className="text-center">
+                <div className="flex items-center justify-center gap-3 mb-4">
+                  <div className="w-4 h-4 bg-red-600 rounded-full animate-pulse"></div>
+                  <span className="text-lg font-semibold text-red-600">Call in Progress</span>
+                </div>
+                <div className="text-5xl font-bold text-gray-900 font-mono">
+                  {Math.floor(callTime / 60)}:{(callTime % 60).toString().padStart(2, '0')}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
-          {/* Scenario Display */}
-          <div className="bg-gray-50 rounded-lg p-6 text-center">
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">{selectedScenarioObj?.title}</h2>
-            <p className="text-gray-600 mb-4">Incoming Call:</p>
-            <div className="bg-white rounded-lg p-4 border-2 border-dashed border-gray-300">
-              <p className="text-gray-700 italic">"{selectedScenarioObj?.script}"</p>
-            </div>
-          </div>
+          {/* Incoming Call Display */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-center">{selectedScenarioObj?.title}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="text-center">
+                <p className="text-gray-600 mb-4">Incoming Call:</p>
+                <div className="bg-gray-50 border-2 border-dashed border-gray-300 rounded-lg p-6">
+                  <p className="text-gray-700 italic text-lg">"{selectedScenarioObj?.script}"</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
-          {/* Action Buttons */}
-          <div>
-            <h3 className="font-semibold text-gray-900 mb-3">Choose Your Response:</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {responses.map((response, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => handleResponseSelect(response)}
-                  className="p-3 bg-blue-50 hover:bg-blue-100 border border-safety-blue text-safety-blue rounded-lg font-semibold transition text-left"
-                >
-                  {response}
-                </button>
-              ))}
-            </div>
-          </div>
+          {/* Response Options */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Choose Your Response</CardTitle>
+              <CardDescription>Select an appropriate action for this situation</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {responses.map((response, idx) => (
+                  <Button
+                    key={idx}
+                    onClick={() => handleResponseSelect(response)}
+                    variant="outline"
+                    className="h-auto py-3 px-4 text-left justify-start hover:bg-blue-50 hover:border-blue-300"
+                  >
+                    <CheckCircle2 className="h-4 w-4 mr-2 text-blue-600 flex-shrink-0" />
+                    {response}
+                  </Button>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
 
-          {/* Feedback */}
+          {/* Feedback Card */}
           {feedback && (
-            <div className="bg-green-50 border-l-4 border-green-500 rounded-lg p-4">
-              <h3 className="font-semibold text-green-900 mb-2">Feedback</h3>
-              <p className="text-gray-700">{feedback}</p>
-            </div>
+            <Alert variant="success" className="border-green-200 bg-green-50">
+              <CheckCircle2 className="h-4 w-4 text-green-600" />
+              <AlertDescription className="ml-2 text-green-800">{feedback}</AlertDescription>
+            </Alert>
           )}
 
           {/* End Call Button */}
-          <button
+          <Button
             onClick={endCall}
-            className="w-full bg-gray-300 text-gray-900 py-3 rounded-lg font-semibold hover:bg-gray-400 transition"
+            className="w-full"
+            variant="outline"
+            size="lg"
           >
+            <Pause className="mr-2 h-4 w-4" />
             End Call & Try Another Scenario
-          </button>
+          </Button>
         </div>
       )}
 
-      {/* Tips Section */}
-      <div className="bg-blue-50 rounded-lg p-6 space-y-4">
-        <h2 className="text-xl font-bold text-gray-900">Safety Tips for Calls:</h2>
-        <ul className="space-y-2">
-          <li className="flex gap-3">
-            <span className="text-safety-blue font-bold">✓</span>
-            <span className="text-gray-700">Never share personal information with unknown callers</span>
-          </li>
-          <li className="flex gap-3">
-            <span className="text-safety-blue font-bold">✓</span>
-            <span className="text-gray-700">Hang up if you feel uncomfortable</span>
-          </li>
-          <li className="flex gap-3">
-            <span className="text-safety-blue font-bold">✓</span>
-            <span className="text-gray-700">Verify caller identity through official channels</span>
-          </li>
-          <li className="flex gap-3">
-            <span className="text-safety-blue font-bold">✓</span>
-            <span className="text-gray-700">Report suspicious calls to authorities</span>
-          </li>
-          <li className="flex gap-3">
-            <span className="text-safety-blue font-bold">✓</span>
-            <span className="text-gray-700">Trust your gut feeling - if something seems off, it probably is</span>
-          </li>
-        </ul>
-      </div>
+      {/* Safety Tips Section */}
+      <Card className="bg-blue-50 border-blue-200">
+        <CardHeader>
+          <CardTitle className="text-blue-900">💡 Safety Tips for Calls</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ul className="space-y-3">
+            {[
+              'Never share personal information with unknown callers',
+              'Hang up if you feel uncomfortable',
+              'Verify caller identity through official channels',
+              'Report suspicious calls to authorities',
+              'Trust your gut feeling - if something seems off, it probably is'
+            ].map((tip, idx) => (
+              <li key={idx} className="flex gap-3">
+                <CheckCircle2 className="h-5 w-5 text-blue-600 flex-shrink-0" />
+                <span className="text-gray-700">{tip}</span>
+              </li>
+            ))}
+          </ul>
+        </CardContent>
+      </Card>
     </div>
   )
 }
