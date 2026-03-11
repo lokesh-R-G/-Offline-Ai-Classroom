@@ -1,19 +1,41 @@
 """
 SafeLearn Backend - FastAPI Application
 Offline AI Academic Assistant with Women Safety Module
+
+Endpoints:
+- POST /upload-notes - Upload and extract text from PDF, DOCX, TXT
+- POST /summarize - Generate summary and key concepts
+- POST /generate-quiz - Generate MCQ, short answer, long answer, application questions
+- POST /ask-doubt - Answer student questions
+- POST /add-contact - Add emergency contact
+- GET /contacts - Get all emergency contacts
+- POST /send-sos - Simulate SOS alert
 """
 
 from fastapi import FastAPI, File, UploadFile, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
-from database import init_db, get_db, SessionLocal, User, StudyNote, Quiz, EmergencyContact, SafetyTip
-from notes_analyzer import NotesAnalyzer
+import json
+import os
+from pathlib import Path
+import shutil
+
+from database import (
+    init_db, get_db, SessionLocal, User, UploadedNote, StudyNote, Quiz,
+    EmergencyContact, SOSAlert, Doubt, Subject
+)
+from file_processor import FileProcessor
+from text_summarizer import TextSummarizer
 from quiz_generator import QuizGenerator
 from doubt_solver import DoubtSolver
 
 # Initialize app
-app = FastAPI(title="SafeLearn API", version="1.0.0")
+app = FastAPI(
+    title="SafeLearn API",
+    version="2.0.0",
+    description="Offline AI Academic Assistant with Women Safety Module"
+)
 
 # Add CORS middleware
 app.add_middleware(
@@ -25,58 +47,116 @@ app.add_middleware(
 )
 
 # Initialize modules
-notes_analyzer = NotesAnalyzer()
+file_processor = FileProcessor()
+text_summarizer = TextSummarizer()
 quiz_generator = QuizGenerator()
 doubt_solver = DoubtSolver()
 
-# Pydantic models
+# Create uploads directory
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
+
+# =====================
+# Pydantic Models
+# =====================
+
 class UserCreate(BaseModel):
     name: str
     email: str
 
 
-class StudyNoteCreate(BaseModel):
-    title: str
-    content: str
+class UploadNotesRequest(BaseModel):
+    user_id: int
+    subject_id: Optional[int] = None
+    subject_name: Optional[str] = None
+
+
+class SummarizeRequest(BaseModel):
+    note_id: int
+    num_sentences: int = 5
+    extract_concepts: bool = True
+
+
+class QuizGenerateRequest(BaseModel):
+    note_id: int
+    num_questions: int = 5
+    difficulty: str = "medium"
+    question_types: List[str] = ["mcq", "short_answer", "long_answer", "application"]
 
 
 class DoubtRequest(BaseModel):
-    doubt: str
+    user_id: int
+    question: str
     context: Optional[str] = None
+    note_id: Optional[int] = None
 
 
 class EmergencyContactCreate(BaseModel):
+    user_id: int
     name: str
     phone: str
+    email: Optional[str] = None
     category: str
+    relationship: Optional[str] = None
     region: Optional[str] = None
 
 
-class SafetyTipCreate(BaseModel):
-    title: str
-    content: str
-    category: str
+class SOSRequest(BaseModel):
+    user_id: int
+    location: Optional[str] = None
+    message: str
 
 
-# Health check endpoint
+class RateSolutionRequest(BaseModel):
+    doubt_id: int
+    rating: int  # 1-5
+
+
+# =====================
+# Health & Setup Endpoints
+# =====================
+
 @app.get("/")
 async def root():
+    """Health check endpoint"""
     return {
         "message": "SafeLearn API",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "status": "running"
     }
 
 
-# User endpoints
+@app.get("/health")
+async def health_check():
+    """Detailed health check"""
+    return {
+        "status": "healthy",
+        "database": "connected",
+        "services": {
+            "file_processor": "ready",
+            "text_summarizer": "ready",
+            "quiz_generator": "ready",
+            "doubt_solver": "ready"
+        }
+    }
+
+
+# =====================
+# User Endpoints
+# =====================
+
 @app.post("/users/")
 async def create_user(user: UserCreate, db=Depends(get_db)):
     """Create a new user"""
-    db_user = User(name=user.name, email=user.email)
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    return db_user
+    try:
+        db_user = User(name=user.name, email=user.email)
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+        return {"id": db_user.id, "name": db_user.name, "email": db_user.email}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Error creating user: {str(e)}")
 
 
 @app.get("/users/{user_id}")
@@ -85,186 +165,623 @@ async def get_user(user_id: int, db=Depends(get_db)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return user
+    return {"id": user.id, "name": user.name, "email": user.email}
 
 
-# Study Notes endpoints
-@app.post("/notes/")
-async def create_note(note: StudyNoteCreate, user_id: int, db=Depends(get_db)):
-    """Create a new study note"""
-    db_note = StudyNote(
-        user_id=user_id,
-        title=note.title,
-        content=note.content
-    )
-    db.add(db_note)
-    db.commit()
-    db.refresh(db_note)
-    return db_note
+# =====================
+# File Upload & Notes Endpoints
+# =====================
 
-
-@app.get("/notes/{note_id}")
-async def get_note(note_id: int, db=Depends(get_db)):
-    """Get a specific study note"""
-    note = db.query(StudyNote).filter(StudyNote.id == note_id).first()
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    return note
-
-
-@app.get("/notes/user/{user_id}")
-async def get_user_notes(user_id: int, db=Depends(get_db)):
-    """Get all notes for a user"""
-    notes = db.query(StudyNote).filter(StudyNote.user_id == user_id).all()
-    return notes
-
-
-# Notes Analysis endpoint
-@app.post("/analyze/")
-async def analyze_notes(note: StudyNoteCreate):
-    """Analyze study notes and extract insights"""
-    analysis = notes_analyzer.analyze_notes(note.content)
-    return {
-        "title": note.title,
-        "analysis": analysis
-    }
-
-
-# Quiz Generation endpoint
-@app.post("/quiz/generate/")
-async def generate_quiz(
-    note_id: int,
-    num_questions: int = 5,
-    difficulty: str = "medium",
+@app.post("/upload-notes")
+async def upload_notes(
+    user_id: int,
+    subject_name: Optional[str] = None,
+    file: UploadFile = File(...),
     db=Depends(get_db)
 ):
-    """Generate quiz from study notes"""
-    note = db.query(StudyNote).filter(StudyNote.id == note_id).first()
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
+    """
+    Upload PDF, DOCX, or TXT notes and extract text
 
-    questions = quiz_generator.generate_quiz(
-        note.content,
-        num_questions=num_questions,
-        difficulty=difficulty
-    )
-    return {
-        "note_id": note_id,
-        "questions": questions,
-        "num_questions": len(questions)
-    }
+    Supported formats:
+    - PDF (.pdf)
+    - Word Documents (.docx)
+    - Text Files (.txt)
+    """
+    try:
+        # Validate file
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="No file provided")
+
+        if not FileProcessor.is_allowed_file(file.filename):
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file type. Allowed: PDF, DOCX, TXT"
+            )
+
+        # Create subject if not exists
+        subject_id = None
+        if subject_name:
+            subject = db.query(Subject).filter(Subject.name == subject_name).first()
+            if not subject:
+                subject = Subject(name=subject_name)
+                db.add(subject)
+                db.commit()
+                db.refresh(subject)
+            subject_id = subject.id
+
+        # Save file
+        file_path = UPLOAD_DIR / f"{user_id}_{file.filename}"
+        with open(file_path, "wb") as f:
+            contents = await file.read()
+            f.write(contents)
+
+        # Extract text
+        file_ext = Path(file.filename).suffix.lower().strip('.')
+        extracted_text = FileProcessor.extract_text(str(file_path), file_ext)
+
+        # Get file statistics
+        stats = FileProcessor.get_file_stats(extracted_text)
+
+        # Save to database
+        db_note = UploadedNote(
+            user_id=user_id,
+            subject_id=subject_id,
+            filename=file.filename,
+            file_type=file_ext,
+            file_path=str(file_path),
+            extracted_text=extracted_text,
+            word_count=stats['word_count']
+        )
+        db.add(db_note)
+        db.commit()
+        db.refresh(db_note)
+
+        return {
+            "id": db_note.id,
+            "filename": file.filename,
+            "file_type": file_ext,
+            "word_count": stats['word_count'],
+            "reading_time_minutes": stats['reading_time_minutes'],
+            "message": "File uploaded and text extracted successfully"
+        }
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Error uploading file: {str(e)}")
+
+
+# =====================
+# Summarization Endpoints
+# =====================
+
+@app.post("/summarize")
+async def summarize_notes(request: SummarizeRequest, db=Depends(get_db)):
+    """
+    Generate summary and key concepts from uploaded notes
+
+    Returns:
+    - Summary text
+    - Key concepts list
+    - Text metrics (word count, reading time, etc.)
+    - Outline
+    """
+    try:
+        # Get the note
+        note = db.query(UploadedNote).filter(UploadedNote.id == request.note_id).first()
+        if not note:
+            raise HTTPException(status_code=404, detail="Note not found")
+
+        text = note.extracted_text
+        if not text:
+            raise HTTPException(status_code=400, detail="Note has no text content")
+
+        # Generate summary
+        summary = text_summarizer.generate_summary(text, request.num_sentences)
+
+        # Extract concepts
+        concepts = []
+        if request.extract_concepts:
+            concepts = text_summarizer.extract_key_concepts(text)
+
+        # Get text metrics
+        metrics = text_summarizer.get_text_metrics(text)
+
+        # Generate outline
+        outline = text_summarizer.generate_outline(text)
+
+        # Save to database
+        note.summary = summary
+        note.key_concepts = json.dumps(concepts)
+        db.commit()
+
+        return {
+            "note_id": note.id,
+            "summary": summary,
+            "key_concepts": concepts,
+            "outline": outline,
+            "metrics": metrics,
+            "message": "Summary and concepts generated successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Error generating summary: {str(e)}")
+
+
+# =====================
+# Quiz Generation Endpoints
+# =====================
+
+@app.post("/generate-quiz")
+async def generate_quiz(request: QuizGenerateRequest, db=Depends(get_db)):
+    """
+    Generate MCQ, short answer, long answer, and application questions
+
+    Question Types:
+    - mcq: Multiple choice questions with 4 options
+    - short_answer: 2-3 line answers (3 marks)
+    - long_answer: Paragraph-length answers (5 marks)
+    - application: Problem-solving/real-world application (6 marks)
+    """
+    try:
+        # Get the note
+        note = db.query(UploadedNote).filter(UploadedNote.id == request.note_id).first()
+        if not note:
+            raise HTTPException(status_code=404, detail="Note not found")
+
+        text = note.extracted_text
+        if not text:
+            raise HTTPException(status_code=400, detail="Note has no text content")
+
+        # Validate difficulty
+        if request.difficulty not in ["easy", "medium", "hard"]:
+            raise HTTPException(status_code=400, detail="Invalid difficulty level")
+
+        # Generate quiz
+        questions = quiz_generator.generate_quiz(
+            text,
+            num_questions=request.num_questions,
+            difficulty=request.difficulty,
+            question_types=request.question_types
+        )
+
+        # Save questions to database
+        for q_idx, question in enumerate(questions):
+            db_quiz = Quiz(
+                note_id=request.note_id,
+                question=question.get('question'),
+                type=question.get('type', 'mcq'),
+                options=json.dumps(question.get('options', [])),
+                correct_answer=str(question.get('correct_answer', '')),
+                answer_keywords=json.dumps(question.get('answer_keywords', [])),
+                difficulty=request.difficulty
+            )
+            db.add(db_quiz)
+
+        db.commit()
+
+        return {
+            "note_id": request.note_id,
+            "num_questions": len(questions),
+            "difficulty": request.difficulty,
+            "questions": questions,
+            "message": f"Generated {len(questions)} question(s) successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Error generating quiz: {str(e)}")
 
 
 @app.get("/quiz/{quiz_id}")
 async def get_quiz(quiz_id: int, db=Depends(get_db)):
-    """Get a specific quiz"""
+    """Get a specific quiz question"""
     quiz = db.query(Quiz).filter(Quiz.id == quiz_id).first()
     if not quiz:
         raise HTTPException(status_code=404, detail="Quiz not found")
-    return quiz
 
-
-# Doubt Solver endpoint
-@app.post("/doubt/solve/")
-async def solve_doubt(request: DoubtRequest):
-    """Solve a student's doubt"""
-    solution = doubt_solver.solve_doubt(request.doubt, request.context)
-    return solution
-
-
-@app.get("/doubt/similar/")
-async def get_similar_doubts(doubt: str):
-    """Get similar doubts"""
-    similar = doubt_solver.get_similar_doubts(doubt)
-    return {"similar_doubts": similar}
-
-
-# Women Safety Module - Emergency Contacts
-@app.post("/safety/emergency-contacts/")
-async def create_emergency_contact(
-    contact: EmergencyContactCreate,
-    db=Depends(get_db)
-):
-    """Add emergency contact"""
-    db_contact = EmergencyContact(
-        name=contact.name,
-        phone=contact.phone,
-        category=contact.category,
-        region=contact.region
-    )
-    db.add(db_contact)
-    db.commit()
-    db.refresh(db_contact)
-    return db_contact
-
-
-@app.get("/safety/emergency-contacts/")
-async def get_emergency_contacts(category: Optional[str] = None, db=Depends(get_db)):
-    """Get emergency contacts"""
-    query = db.query(EmergencyContact)
-    if category:
-        query = query.filter(EmergencyContact.category == category)
-    contacts = query.all()
-    return contacts
-
-
-@app.get("/safety/emergency-contacts/{contact_id}")
-async def get_emergency_contact(contact_id: int, db=Depends(get_db)):
-    """Get specific emergency contact"""
-    contact = db.query(EmergencyContact).filter(EmergencyContact.id == contact_id).first()
-    if not contact:
-        raise HTTPException(status_code=404, detail="Contact not found")
-    return contact
-
-
-# Women Safety Module - Safety Tips
-@app.post("/safety/tips/")
-async def create_safety_tip(tip: SafetyTipCreate, db=Depends(get_db)):
-    """Add safety tip"""
-    db_tip = SafetyTip(
-        title=tip.title,
-        content=tip.content,
-        category=tip.category
-    )
-    db.add(db_tip)
-    db.commit()
-    db.refresh(db_tip)
-    return db_tip
-
-
-@app.get("/safety/tips/")
-async def get_safety_tips(category: Optional[str] = None, db=Depends(get_db)):
-    """Get safety tips"""
-    query = db.query(SafetyTip)
-    if category:
-        query = query.filter(SafetyTip.category == category)
-    tips = query.all()
-    return tips
-
-
-@app.get("/safety/tips/{tip_id}")
-async def get_safety_tip(tip_id: int, db=Depends(get_db)):
-    """Get specific safety tip"""
-    tip = db.query(SafetyTip).filter(SafetyTip.id == tip_id).first()
-    if not tip:
-        raise HTTPException(status_code=404, detail="Tip not found")
-    return tip
-
-
-# Fake Call Simulation endpoint
-@app.post("/safety/fake-call/")
-async def simulate_fake_call():
-    """Simulate a fake call for practice"""
     return {
-        "status": "call_initiated",
-        "call_type": "incoming",
-        "caller_id": "Unknown",
-        "message": "Practice your response to this call",
-        "duration_limit": 60  # seconds
+        "id": quiz.id,
+        "question": quiz.question,
+        "type": quiz.type,
+        "options": json.loads(quiz.options) if quiz.options else [],
+        "difficulty": quiz.difficulty,
+        "marks": 3 if quiz.type == "short_answer" else 5 if quiz.type == "long_answer" else 6 if quiz.type == "application" else 1
     }
 
 
-if __name__ == "__main__":
+@app.get("/quiz/note/{note_id}")
+async def get_note_quizzes(note_id: int, db=Depends(get_db)):
+    """Get all quizzes for a specific note"""
+    quizzes = db.query(Quiz).filter(Quiz.note_id == note_id).all()
+    return {
+        "note_id": note_id,
+        "total_quizzes": len(quizzes),
+        "quizzes": [
+            {
+                "id": q.id,
+                "question": q.question,
+                "type": q.type,
+                "difficulty": q.difficulty
+            }
+            for q in quizzes
+        ]
+    }
+
+
+# =====================
+# Doubt Solver Endpoints
+# =====================
+
+@app.post("/ask-doubt")
+async def ask_doubt(request: DoubtRequest, db=Depends(get_db)):
+    """
+    Accept a student question and return explanation using notes
+
+    Can be used with or without note context
+    """
+    try:
+        # Get context from note if provided
+        context = request.context
+        if request.note_id and not context:
+            note = db.query(UploadedNote).filter(UploadedNote.id == request.note_id).first()
+            if note:
+                context = note.extracted_text
+
+        # Solve the doubt
+        solution = doubt_solver.solve_doubt(request.question, context)
+
+        # Save the doubt and solution to database
+        db_doubt = Doubt(
+            user_id=request.user_id,
+            question=request.question,
+            answer=solution.get('explanation'),
+            context=context
+        )
+        db.add(db_doubt)
+        db.commit()
+        db.refresh(db_doubt)
+
+        return {
+            "doubt_id": db_doubt.id,
+            "question": request.question,
+            "explanation": solution.get('explanation'),
+            "doubt_type": solution.get('doubt_type'),
+            "keywords": solution.get('keywords'),
+            "related_concepts": solution.get('related_concepts'),
+            "examples": solution.get('examples'),
+            "difficulty_level": solution.get('difficulty_level'),
+            "message": "Doubt solved successfully"
+        }
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Error solving doubt: {str(e)}")
+
+
+@app.get("/doubt/{doubt_id}")
+async def get_doubt(doubt_id: int, db=Depends(get_db)):
+    """Get a specific doubt and its solution"""
+    doubt = db.query(Doubt).filter(Doubt.id == doubt_id).first()
+    if not doubt:
+        raise HTTPException(status_code=404, detail="Doubt not found")
+
+    return {
+        "id": doubt.id,
+        "question": doubt.question,
+        "answer": doubt.answer,
+        "rating": doubt.rating,
+        "created_at": doubt.created_at
+    }
+
+
+@app.get("/doubts/user/{user_id}")
+async def get_user_doubts(user_id: int, db=Depends(get_db)):
+    """Get all doubts of a user"""
+    doubts = db.query(Doubt).filter(Doubt.user_id == user_id).all()
+    return {
+        "user_id": user_id,
+        "total_doubts": len(doubts),
+        "doubts": [
+            {
+                "id": d.id,
+                "question": d.question[:100],
+                "has_answer": bool(d.answer),
+                "rating": d.rating,
+                "created_at": d.created_at
+            }
+            for d in doubts
+        ]
+    }
+
+
+@app.post("/doubt/{doubt_id}/rate")
+async def rate_doubt_solution(doubt_id: int, request: RateSolutionRequest, db=Depends(get_db)):
+    """Rate a doubt solution (1-5 stars)"""
+    try:
+        if not 1 <= request.rating <= 5:
+            raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+
+        doubt = db.query(Doubt).filter(Doubt.id == doubt_id).first()
+        if not doubt:
+            raise HTTPException(status_code=404, detail="Doubt not found")
+
+        doubt.rating = request.rating
+        db.commit()
+
+        return {"message": f"Doubt rated {request.rating} stars successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# =====================
+# Emergency Contacts Endpoints
+# =====================
+
+@app.post("/add-contact")
+async def add_emergency_contact(contact: EmergencyContactCreate, db=Depends(get_db)):
+    """Add an emergency contact"""
+    try:
+        db_contact = EmergencyContact(
+            user_id=contact.user_id,
+            name=contact.name,
+            phone=contact.phone,
+            email=contact.email,
+            category=contact.category,
+            relationship=contact.relationship,
+            region=contact.region
+        )
+        db.add(db_contact)
+        db.commit()
+        db.refresh(db_contact)
+
+        return {
+            "id": db_contact.id,
+            "name": db_contact.name,
+            "phone": db_contact.phone,
+            "category": db_contact.category,
+            "message": "Emergency contact added successfully"
+        }
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Error adding contact: {str(e)}")
+
+
+@app.get("/contacts")
+async def get_emergency_contacts(
+    user_id: int,
+    category: Optional[str] = None,
+    db=Depends(get_db)
+):
+    """Get all emergency contacts for a user, optionally filtered by category"""
+    try:
+        query = db.query(EmergencyContact).filter(EmergencyContact.user_id == user_id)
+
+        if category:
+            query = query.filter(EmergencyContact.category == category)
+
+        contacts = query.all()
+
+        return {
+            "user_id": user_id,
+            "total_contacts": len(contacts),
+            "category_filter": category,
+            "contacts": [
+                {
+                    "id": c.id,
+                    "name": c.name,
+                    "phone": c.phone,
+                    "email": c.email,
+                    "category": c.category,
+                    "relationship": c.relationship,
+                    "region": c.region,
+                    "is_favorite": c.is_favorite
+                }
+                for c in contacts
+            ]
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/contacts/{contact_id}")
+async def get_emergency_contact(contact_id: int, db=Depends(get_db)):
+    """Get a specific emergency contact"""
+    contact = db.query(EmergencyContact).filter(EmergencyContact.id == contact_id).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    return {
+        "id": contact.id,
+        "name": contact.name,
+        "phone": contact.phone,
+        "email": contact.email,
+        "category": contact.category,
+        "relationship": contact.relationship,
+        "region": contact.region,
+        "is_favorite": contact.is_favorite
+    }
+
+
+@app.delete("/contacts/{contact_id}")
+async def delete_emergency_contact(contact_id: int, db=Depends(get_db)):
+    """Delete an emergency contact"""
+    try:
+        contact = db.query(EmergencyContact).filter(EmergencyContact.id == contact_id).first()
+        if not contact:
+            raise HTTPException(status_code=404, detail="Contact not found")
+
+        db.delete(contact)
+        db.commit()
+
+        return {"message": "Contact deleted successfully"}
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/contacts/{contact_id}/favorite")
+async def toggle_favorite_contact(contact_id: int, db=Depends(get_db)):
+    """Toggle favorite status of a contact"""
+    try:
+        contact = db.query(EmergencyContact).filter(EmergencyContact.id == contact_id).first()
+        if not contact:
+            raise HTTPException(status_code=404, detail="Contact not found")
+
+        contact.is_favorite = not contact.is_favorite
+        db.commit()
+
+        return {
+            "id": contact.id,
+            "is_favorite": contact.is_favorite,
+            "message": f"Contact {'added to' if contact.is_favorite else 'removed from'} favorites"
+        }
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# =====================
+# SOS Alert Endpoints
+# =====================
+
+@app.post("/send-sos")
+async def send_sos_alert(request: SOSRequest, db=Depends(get_db)):
+    """
+    Simulate sending an SOS alert
+
+    In a real application, this would:
+    - Send notifications to emergency contacts
+    - Share location with trusted people
+    - Alert authorities if enabled
+    """
+    try:
+        # Create SOS alert record
+        db_sos = SOSAlert(
+            user_id=request.user_id,
+            location=request.location,
+            message=request.message,
+            status="sent"
+        )
+        db.add(db_sos)
+        db.commit()
+        db.refresh(db_sos)
+
+        # Get emergency contacts
+        contacts = db.query(EmergencyContact).filter(
+            EmergencyContact.user_id == request.user_id
+        ).all()
+
+        return {
+            "sos_id": db_sos.id,
+            "status": "sent",
+            "location": request.location,
+            "message": request.message,
+            "contacts_notified": len(contacts),
+            "notification_details": [
+                {"name": c.name, "phone": c.phone, "category": c.category}
+                for c in contacts[:3]  # Show first 3 contacts
+            ],
+            "timestamp": db_sos.created_at,
+            "alert_message": "SOS alert sent successfully. Emergency contacts have been notified. Stay safe!"
+        }
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Error sending SOS: {str(e)}")
+
+
+@app.get("/sos/{sos_id}")
+async def get_sos_alert(sos_id: int, db=Depends(get_db)):
+    """Get details of a specific SOS alert"""
+    sos = db.query(SOSAlert).filter(SOSAlert.id == sos_id).first()
+    if not sos:
+        raise HTTPException(status_code=404, detail="SOS alert not found")
+
+    return {
+        "id": sos.id,
+        "location": sos.location,
+        "message": sos.message,
+        "status": sos.status,
+        "created_at": sos.created_at,
+        "updated_at": sos.updated_at
+    }
+
+
+@app.get("/sos/user/{user_id}")
+async def get_user_sos_alerts(user_id: int, db=Depends(get_db)):
+    """Get all SOS alerts from a user"""
+    alerts = db.query(SOSAlert).filter(SOSAlert.user_id == user_id).all()
+
+    return {
+        "user_id": user_id,
+        "total_alerts": len(alerts),
+        "alerts": [
+            {
+                "id": a.id,
+                "status": a.status,
+                "created_at": a.created_at,
+                "location": a.location
+            }
+            for a in alerts
+        ]
+    }
+
+
+# =====================
+# Statistics & Analytics Endpoints
+# =====================
+
+@app.get("/stats/user/{user_id}")
+async def get_user_statistics(user_id: int, db=Depends(get_db)):
+    """Get user statistics"""
+    try:
+        notes_count = db.query(UploadedNote).filter(UploadedNote.user_id == user_id).count()
+        quizzes_count = db.query(Quiz).join(
+            UploadedNote
+        ).filter(UploadedNote.user_id == user_id).count()
+        doubts_count = db.query(Doubt).filter(Doubt.user_id == user_id).count()
+        sos_count = db.query(SOSAlert).filter(SOSAlert.user_id == user_id).count()
+        contacts_count = db.query(EmergencyContact).filter(EmergencyContact.user_id == user_id).count()
+
+        return {
+            "user_id": user_id,
+            "notes_uploaded": notes_count,
+            "quizzes_generated": quizzes_count,
+            "doubts_asked": doubts_count,
+            "sos_alerts_sent": sos_count,
+            "emergency_contacts": contacts_count
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# =====================
+# Initialization
+# =====================
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on startup"""
     init_db()
+    print("✅ SafeLearn Backend Started")
+    print(f"📁 Upload directory: {UPLOAD_DIR}")
+    print("🗄️  Database initialized")
+
+
+if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
