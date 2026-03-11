@@ -29,6 +29,7 @@ from file_processor import FileProcessor
 from text_summarizer import TextSummarizer
 from quiz_generator import QuizGenerator
 from doubt_solver import DoubtSolver
+from notes_analyzer import NotesAnalyzer
 
 # Initialize app
 app = FastAPI(
@@ -51,6 +52,7 @@ file_processor = FileProcessor()
 text_summarizer = TextSummarizer()
 quiz_generator = QuizGenerator()
 doubt_solver = DoubtSolver()
+notes_analyzer = NotesAnalyzer()
 
 # Create uploads directory
 UPLOAD_DIR = Path("uploads")
@@ -308,6 +310,201 @@ async def summarize_notes(request: SummarizeRequest, db=Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=400, detail=f"Error generating summary: {str(e)}")
+
+
+# =====================
+# Advanced Notes Analysis Endpoints
+# =====================
+
+@app.post("/analyze-notes")
+async def analyze_notes(note_id: int, db=Depends(get_db)):
+    """
+    Comprehensive analysis of uploaded notes including:
+    - Subject code detection (e.g., CS2301)
+    - Subject name identification
+    - Undergraduate-friendly summary
+    - Key concepts extraction
+    - Content metrics and difficulty level
+
+    Returns:
+    {
+        "subject": "Data Structures",
+        "subject_code": "CS2301",
+        "summary": "Short summary for students",
+        "key_concepts": ["Arrays", "Linked Lists", "Stack", "Queue"],
+        "metrics": {...}
+    }
+    """
+    try:
+        # Get the note
+        note = db.query(UploadedNote).filter(UploadedNote.id == note_id).first()
+        if not note:
+            raise HTTPException(status_code=404, detail="Note not found")
+
+        text = note.extracted_text
+        if not text:
+            raise HTTPException(status_code=400, detail="Note has no text content")
+
+        # Perform comprehensive analysis
+        analysis = notes_analyzer.analyze_notes(text)
+
+        # Update database with detected information
+        if analysis['subject_code'] != 'UNKNOWN':
+            # Try to get or create subject
+            subject = db.query(Subject).filter(Subject.name == analysis['subject']).first()
+            if not subject and analysis['subject'] != 'General Subject':
+                subject = Subject(name=analysis['subject'], description=analysis['summary'])
+                db.add(subject)
+                db.commit()
+                db.refresh(subject)
+
+            if subject:
+                note.subject_id = subject.id
+
+        note.key_concepts = json.dumps(analysis['key_concepts'])
+        note.summary = analysis['summary']
+        db.commit()
+
+        return {
+            "note_id": note_id,
+            "subject": analysis['subject'],
+            "subject_code": analysis['subject_code'],
+            "summary": analysis['summary'],
+            "key_concepts": analysis['key_concepts'],
+            "content_type": analysis['content_type'],
+            "metrics": analysis['metrics'],
+            "message": "Notes analyzed successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Error analyzing notes: {str(e)}")
+
+
+@app.post("/generate-study-guide")
+async def generate_study_guide(note_id: int, db=Depends(get_db)):
+    """
+    Generate a comprehensive study guide from notes
+
+    Returns:
+    - Subject information
+    - Summary
+    - Key concepts
+    - Key definitions
+    - Study tips
+    - Difficulty level
+    - Estimated study time
+    """
+    try:
+        # Get the note
+        note = db.query(UploadedNote).filter(UploadedNote.id == note_id).first()
+        if not note:
+            raise HTTPException(status_code=404, detail="Note not found")
+
+        text = note.extracted_text
+        if not text:
+            raise HTTPException(status_code=400, detail="Note has no text content")
+
+        # Generate study guide
+        subject_code = None
+        if note.subject_id:
+            subject = db.query(Subject).filter(Subject.id == note.subject_id).first()
+            if subject:
+                subject_code = subject.name  # Can be enhanced to use actual code
+
+        study_guide = notes_analyzer.generate_study_guide(text, subject_code)
+
+        return {
+            "note_id": note_id,
+            "subject": study_guide['subject'],
+            "subject_code": study_guide['subject_code'],
+            "summary": study_guide['summary'],
+            "key_concepts": study_guide['key_concepts'],
+            "key_definitions": study_guide['key_definitions'],
+            "study_tips": study_guide['study_tips'],
+            "study_time_estimate_hours": study_guide['study_time_estimate_hours'],
+            "difficulty_level": study_guide['difficulty_level'],
+            "message": "Study guide generated successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Error generating study guide: {str(e)}")
+
+
+@app.post("/extract-definitions")
+async def extract_definitions(note_id: int, db=Depends(get_db)):
+    """
+    Extract key definitions from notes
+
+    Finds sentences that define important concepts in the format:
+    "Term is defined as...", "Term means...", etc.
+    """
+    try:
+        # Get the note
+        note = db.query(UploadedNote).filter(UploadedNote.id == note_id).first()
+        if not note:
+            raise HTTPException(status_code=404, detail="Note not found")
+
+        text = note.extracted_text
+        if not text:
+            raise HTTPException(status_code=400, detail="Note has no text content")
+
+        # Extract definitions
+        definitions = notes_analyzer.extract_definitions(text)
+
+        return {
+            "note_id": note_id,
+            "total_definitions": len(definitions),
+            "definitions": definitions,
+            "message": f"Extracted {len(definitions)} definitions successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error extracting definitions: {str(e)}")
+
+
+@app.get("/detect-subject/{note_id}")
+async def detect_subject(note_id: int, db=Depends(get_db)):
+    """
+    Detect subject code and name from a note
+
+    Returns subject code (e.g., CS2301) and full subject name
+    """
+    try:
+        # Get the note
+        note = db.query(UploadedNote).filter(UploadedNote.id == note_id).first()
+        if not note:
+            raise HTTPException(status_code=404, detail="Note not found")
+
+        text = note.extracted_text
+        if not text:
+            raise HTTPException(status_code=400, detail="Note has no text content")
+
+        # Detect subject
+        subject_code, subject_name = notes_analyzer.detect_subject(text)
+
+        # If not found using patterns, try inference
+        if not subject_code:
+            subject_code, subject_name = notes_analyzer._infer_subject_from_keywords(text)
+
+        return {
+            "note_id": note_id,
+            "subject_code": subject_code or "UNKNOWN",
+            "subject_name": subject_name or "Unable to detect subject",
+            "confidence": "high" if subject_code else "low"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error detecting subject: {str(e)}")
 
 
 # =====================
